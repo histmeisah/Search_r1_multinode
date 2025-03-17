@@ -20,13 +20,15 @@ tensorflow/my_graph/*
 data
 sft/output/*
 sft/data/*
-
+cache/
 # Distribution / packaging
 .Python
 build/
 develop-eggs/
 dist/
 downloads/
+verl_checkpoints/
+wandb/
 eggs/
 .eggs/
 lib/
@@ -120,3 +122,15 @@ tests/e2e/toy_examples/deepspeed/synchronous/output.txt
 log/
 
 **logs
+
+model/
+**/model/
+
+# Specific large directories
+wandb/
+outputs/
+model/
+data/
+cache/
+scripts/e5_Flat.index
+e5_Flat.index

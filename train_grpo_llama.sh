@@ -1,34 +1,22 @@
+source /home/ma-user/modelarts/work/jjw/Search-R1/r1_env.sh
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-export DATA_DIR='data/nq_search'
-
+export DATA_DIR='/home/ma-user/modelarts/work/jjw/Search-R1/data/nq_search'
+# export HYDRA_FULL_ERROR=1
+export WANDB_API_KEY='5d830c409e2aa7dff34c333a2f79798a877bfc7b'
+export LD_LIBRARY_PATH=/usr/lib64:$LD_LIBRARY_PATH
 WAND_PROJECT='Search-R1'
 
-export BASE_MODEL='meta-llama/Llama-3.2-3B'
-export EXPERIMENT_NAME=nq-search-r1-grpo-llama3.2-3b-em
-# export BASE_MODEL='meta-llama/Llama-3.2-3B-Instruct'
-# export EXPERIMENT_NAME=nq-search-r1-grpo-llama3.2-3b-it-em
-# export BASE_MODEL='meta-llama/Llama-3.1-8B'
-# export EXPERIMENT_NAME=nq-search-r1-grpo-llama3.1-8b-em
-# export BASE_MODEL='meta-llama/Llama-3.1-8B-Instruct'
-# export EXPERIMENT_NAME=nq-search-r1-grpo-llama3.1-8b-it-em
+export BASE_MODEL='/home/ma-user/modelarts/work/jjw/Search-R1/model/meta-llama/Llama-3.2-3B'
+# export BASE_MODEL='/home/ma-user/modelarts/work/model/Qwen2.5-7B-Instruct'
+export EXPERIMENT_NAME=nq-search-r1-ppo-llama3.2-3b-em
 
-# export BASE_MODEL='Qwen/Qwen2.5-3B'
-# export EXPERIMENT_NAME=nq-search-r1-grpo-qwen2.5-3b-em
-# export BASE_MODEL='Qwen/Qwen2.5-3B-Instruct'
-# export EXPERIMENT_NAME=nq-search-r1-grpo-qwen2.5-3b-it-em
-# export BASE_MODEL='Qwen/Qwen2.5-7B'
-# export EXPERIMENT_NAME=nq-search-r1-grpo-qwen2.5-7b-em
-# export BASE_MODEL='Qwen/Qwen2.5-7B-Instruct'
-# export EXPERIMENT_NAME=nq-search-r1-grpo-qwen2.5-7b-it-em
-
-# set -x
 export VLLM_ATTENTION_BACKEND=XFORMERS # vllm + qwen2-7b with flash_attn has some issues
 
 # max_prompt_length = (config['training']['max_start_length'] + config['training']['max_response_length'] * (config['training']['max_turns'] - 1) + config['training']['max_obs_length'] * config['training']['max_turns'])
 
 PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
-    data.train_files=$TRAIN_DATA_DIR/train.parquet \
-    data.val_files=$TEST_DATA_DIR/test.parquet \
+    data.train_files=$DATA_DIR/train.parquet \
+    data.val_files=$DATA_DIR/test.parquet \
     data.train_data_num=null \
     data.val_data_num=null \
     data.train_batch_size=512 \
@@ -68,8 +56,8 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     trainer.default_hdfs_dir=null \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
-    trainer.save_freq=100 \
-    trainer.test_freq=50 \
+    trainer.save_freq=50 \
+    trainer.test_freq=20 \
     trainer.project_name=$WAND_PROJECT \
     trainer.experiment_name=$EXPERIMENT_NAME \
     trainer.total_epochs=15 \
