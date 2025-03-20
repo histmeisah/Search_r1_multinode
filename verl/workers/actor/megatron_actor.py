@@ -19,19 +19,24 @@ In megatron actor, the differences are:
 Note that our model doesn't have to be `MegatronModule` because we don't share embedding in the last layer
 """
 
+import importlib
 from functools import partial
+from packaging.version import Version
 from typing import Iterable, Dict
 
 import torch
 from torch import nn
 import torch.distributed
-# from megatron import get_args
-from megatron.optimizer import DistributedOptimizer
-from verl.utils.megatron.optimizer_config import OptimizerConfig
+from megatron.core.optimizer import OptimizerConfig
 from megatron.core import parallel_state as mpu
 from megatron.core import ModelParallelConfig
+from verl.utils.megatron_utils import get_model_config
 from megatron.core.pipeline_parallel import get_forward_backward_func
+
+from megatron.core.distributed import finalize_model_grads
 # from megatron.core.optimizer import DistributedOptimizer
+
+from megatron.core.optimizer import DistributedOptimizer
 
 from omegaconf import OmegaConf
 from verl.utils.megatron.tensor_parallel import vocab_parallel_compute_entropy_loss, vocab_parallel_log_probs_from_logits
@@ -40,7 +45,7 @@ from verl import DataProto
 from verl.trainer.ppo import core_algos
 from verl.workers.actor import BasePPOActor
 from verl.utils.py_functional import append_to_dict
-from verl.utils.torch_functional import logprobs_from_logits, broadcast_dict_tensor, split_dict_tensor_into_batches
+from verl.utils.torch_functional import logprobs_from_logits, masked_mean, broadcast_dict_tensor, split_dict_tensor_into_batches
 
 __all__ = ['MegatronPPOActor']
 
@@ -54,7 +59,7 @@ class MegatronPPOActor(BasePPOActor):
         Args:
             config (OmegaConf): the basic config that contains the hyper-parameters of PPO Actor. It must contain
 
-                ``ppo_micro_batch_size``: minibatch size when updating ppo.
+                ``ppo_micro_batch_size_per_gpu``: micro batch size when updating ppo.
 
                 ``ppo_mini_batch_size``: minibatch size when updating ppo using the batch data.
 
@@ -107,9 +112,9 @@ class MegatronPPOActor(BasePPOActor):
         >>>                          actor_optimizer=actor_optimizer)
         """
         super().__init__(config)
+        self._validate_config(config)
         self.model_config = model_config
         self.megatron_config = megatron_config
-        # self.megatron_args = get_args()
         self.actor_module = actor_module
         self.actor_optimizer: DistributedOptimizer = actor_optimizer
         self.actor_optimizer_config = actor_optimizer_config
@@ -125,6 +130,14 @@ class MegatronPPOActor(BasePPOActor):
             'pipeline_model_parallel_split_rank': None,
             'reduce_grads_use_alltoall': False
         })
+
+        config = get_model_config(self.actor_module[0])
+        print(config)
+        config.finalize_model_grads_func = finalize_model_grads
+
+    def _validate_config(self, config) -> None:
+        """Validate config options not implemented for Megatron backend"""
+        assert config.get('ulysses_sequence_parallel_size', 1) == 1
 
     def compute_log_prob(self, data: DataProto) -> torch.Tensor:
         """Compute the log probability of the responses given input_ids, attention_mask and position_ids
@@ -150,7 +163,7 @@ class MegatronPPOActor(BasePPOActor):
             response = data['responses']
             response_length = response.size(1)
             logits = output['logits']
-            logits = logits[:, -response_length - 1:-1]
+            logits = logits[:, -response_length - 1:-1].contiguous()
             log_probs = vocab_parallel_log_probs_from_logits(logits, response)
             return {'log_probs': log_probs}
 
@@ -210,6 +223,8 @@ class MegatronPPOActor(BasePPOActor):
 
         """
         select_keys = ['responses', 'input_ids', 'attention_mask', 'position_ids', 'old_log_probs', 'advantages']
+        if self.config.use_kl_loss:
+            select_keys.append('ref_log_prob')
         data = data.select(batch_keys=select_keys)
         return data.make_iterator(mini_batch_size=self.config.ppo_mini_batch_size,
                                   epochs=self.config.ppo_epochs,
@@ -232,7 +247,7 @@ class MegatronPPOActor(BasePPOActor):
         if data.meta_info.get('micro_batch_size', None) is not None:
             batch_size = data.meta_info['micro_batch_size']
         else:
-            batch_size = self.config.ppo_micro_batch_size
+            batch_size = self.config.ppo_micro_batch_size_per_gpu
         batches = split_dict_tensor_into_batches(data.batch, batch_size=batch_size)
         # compute input shapes for pp stages
         input_shapes = compute_transformers_input_shapes(
@@ -265,8 +280,10 @@ class MegatronPPOActor(BasePPOActor):
 
             # compute policy loss
             logits = output.logits
-            logits = logits[:, -response_length - 1:-1]
+            logits = logits[:, -response_length - 1:-1].contiguous()
+            logits_back = logits.clone()
             log_prob = vocab_parallel_log_probs_from_logits(logits, responses)
+            logits = logits_back
             pg_loss, pg_clipfrac, ppo_kl = core_algos.compute_policy_loss(old_log_prob=old_log_prob,
                                                                           log_prob=log_prob,
                                                                           advantages=advantages,
@@ -274,6 +291,20 @@ class MegatronPPOActor(BasePPOActor):
                                                                           cliprange=clip_ratio)
             entropy_loss = vocab_parallel_compute_entropy_loss(logits, eos_mask=response_mask)
             policy_loss = pg_loss - entropy_loss * entropy_coeff
+
+            metrics = {}
+            if self.config.use_kl_loss:
+                ref_log_prob = data['ref_log_prob']
+                # compute kl loss
+                kld = core_algos.kl_penalty(logprob=log_prob,
+                                            ref_logprob=ref_log_prob,
+                                            kl_penalty=self.config.kl_loss_type)
+                kl_loss = masked_mean(kld, response_mask)
+
+                policy_loss = policy_loss + kl_loss * self.config.kl_loss_coef
+                metrics['actor/kl_loss'] = kl_loss.detach().item()
+                metrics['actor/kl_coef'] = self.config.kl_loss_coef
+
             # return loss and stats
             stats = {
                 'actor/entropy_loss': entropy_loss.detach().item(),
@@ -281,6 +312,7 @@ class MegatronPPOActor(BasePPOActor):
                 'actor/pg_clipfrac': pg_clipfrac.detach().item(),
                 'actor/ppo_kl': ppo_kl.detach().item()
             }
+            append_to_dict(stats, metrics)
             return policy_loss, stats
 
         def forward_step(batch_iter, model):
@@ -306,9 +338,7 @@ class MegatronPPOActor(BasePPOActor):
                 data_iterator=batch_generator,
                 model=self.actor_module,
                 num_microbatches=n_micro_batch,
-                input_shapes=input_shapes,  # must set for flash-attn sequence packing
                 seq_length=batch_size * seq_len,  # no use when input_shapes was set
-                hidden_size=self.model_config.hidden_size,  # no use when input_shapes was set
                 micro_batch_size=1,  # no use when input_shapes was set
                 forward_only=forward_only,
             )
@@ -319,7 +349,6 @@ class MegatronPPOActor(BasePPOActor):
                 model=self.actor_module,
                 num_microbatches=n_micro_batch,
                 seq_length=batch_size * seq_len,  # in use for pp = 1
-                hidden_size=self.model_config.hidden_size,  # in use for pp = 1
                 micro_batch_size=1,  # in use for pp = 1
                 forward_only=forward_only,
             )
@@ -345,22 +374,19 @@ class MegatronPPOActor(BasePPOActor):
             # use use_contiguous_buffers_in_local_ddp and no overlap_dp_param_comm
             for chunk in self.actor_module:
                 # if use distributed optimizer, zero grad buffer will be handled by optimizer
-                chunk.zero_grad_buffer(zero_buffer=(not self.actor_optimizer_config.use_distributed_optimizer))
+                chunk.zero_grad_buffer()
 
             metric_micro_batch = self.forward_backward_batch(data)
             for metric in metric_micro_batch:
                 append_to_dict(metrics, metric)  # append the metric from this micro-batch to global metrics.
 
-            update_successful, grad_norm, num_zeros_in_grad = self.actor_optimizer.step(
-                self.megatron_config, self.megatron_config.timers)
+            update_successful, grad_norm, num_zeros_in_grad = self.actor_optimizer.step()
+
             if update_successful:
                 # allgather already execute in optimizer.step in new megatron
                 pass
             else:
                 raise NotImplementedError
-
-            for metric in metric_micro_batch:
-                append_to_dict(metrics, metric)  # append the metric from this micro-batch to global metrics.
 
         # add empty cache after each compute
         torch.cuda.empty_cache()

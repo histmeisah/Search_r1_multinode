@@ -18,7 +18,7 @@ name = "verl"
 # The actual version is specified in the [tool.setuptools.dynamic] section below.
 dynamic = ["version"]
 
-description = "veRL: Volcano Engine Reinforcement Learning for LLM"
+description = "verl: Volcano Engine Reinforcement Learning for LLM"
 license = {file = "LICENSE"}  # or "Apache-2.0", if you prefer an SPDX identifier
 readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.8"
@@ -35,19 +35,29 @@ dependencies = [
     "datasets",
     "dill",
     "hydra-core",
+    "math-verify",
     "numpy",
+    "pandas",
+    "peft",
+    "pyarrow>=15.0.0",
     "pybind11",
-    "ray",
-    "tensordict",
-    "transformers<4.48",
+    "pylatexenc",
+    "ray>=2.10",
+    "tensordict<0.6",
+    "torchdata",
+    "transformers",
     "vllm<=0.6.3",
+    'wandb',
 ]
 
 # Optional dependencies (extras_require in setup.py)
 [project.optional-dependencies]
 test = [
-  "pytest", "yapf"
+  "pytest", "yapf", "py-spy",
 ]
+prime = ["pyext"]
+gpu = ["liger-kernel", "flash-attn"]
+sglang = ["sglang[all]==0.4.3.post3"]
 
 # URLs
 [project.urls]

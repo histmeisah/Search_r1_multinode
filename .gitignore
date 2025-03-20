@@ -1,3 +1,4 @@
+
 **/*.pt
 **/checkpoints
 **/wget-log
@@ -17,18 +18,14 @@ tensorflow/my_graph/*
 .idea/
 # C extensions
 *.so
-data
-sft/output/*
-sft/data/*
-cache/
+
 # Distribution / packaging
 .Python
+env/
 build/
 develop-eggs/
 dist/
 downloads/
-verl_checkpoints/
-wandb/
 eggs/
 .eggs/
 lib/
@@ -69,10 +66,6 @@ coverage.xml
 *.log
 local_settings.py
 
-image_outputs
-
-checkpoints
-
 # Flask stuff:
 instance/
 .webassets-cache
@@ -95,9 +88,12 @@ target/
 # celery beat schedule file
 celerybeat-schedule
 
+# dotenv
+.env
 
 # virtualenv
 venv/
+.venv/
 ENV/
 
 # Spyder project settings
@@ -118,19 +114,14 @@ tests/e2e/toy_examples/deepspeed/synchronous/output.txt
 # vim
 *.swp
 
-# log*
-log/
+# ckpt
+*.lock
 
-**logs
+# data
+*.parquet
 
-model/
-**/model/
 
-# Specific large directories
-wandb/
-outputs/
-model/
-data/
-cache/
-scripts/e5_Flat.index
-e5_Flat.index
+# local logs
+logs
+log
+outputs
