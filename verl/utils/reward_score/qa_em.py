@@ -60,54 +60,53 @@ def subem_check(prediction, golden_answers):
 
 
 def extract_solution(solution_str):
-    """Extract the equation from the solution string."""
-    # Remove everything before the first "Assistant:"
-    # if "Assistant:" in solution_str:
-    #     solution_str = solution_str.split("Assistant:", 1)[1]
-    # elif "<|im_start|>assistant" in solution_str:
-    #     solution_str = solution_str.split("<|im_start|>assistant", 1)[1]
-    # else:
-    #     return None
-    # solution_str = solution_str.split('\n')[-1]
-
+    """提取答案，支持搜索和非搜索场景"""
+    # 首先尝试查找<answer>标签
     answer_pattern = r'<answer>(.*?)</answer>'
-    match = re.finditer(answer_pattern, solution_str, re.DOTALL)
-    matches = list(match)
+    answer_matches = list(re.finditer(answer_pattern, solution_str, re.DOTALL))
     
-    # If there are 0 or exactly 1 matches, return None
-    if len(matches) <= 1:
-        return None
+    if answer_matches:
+        # 使用最后一个<answer>标签（对多轮交互有用）
+        return answer_matches[-1].group(1).strip()
     
-    # If there are 2 or more matches, return the last one
-    return matches[-1].group(1).strip()
+    # 如果没有找到<answer>标签，尝试其他启发式方法
+    lines = solution_str.strip().split('\n')
+    if lines:
+        return lines[-1].strip()
+    
+    return None
 
 
 def compute_score_em(solution_str, ground_truth, method='strict', format_score=0., score=1.):
-    """The scoring function for exact match (EM).
-
-    Args:
-        solution_str: the solution text
-        ground_truth: the ground truth
-        method: the method to extract the solution, choices are 'strict' and 'flexible'
-        format_score: the score for the format
-        score: the score for the correct answer
-    """
+    """统一的EM打分函数，适用于普通QA和搜索QA任务"""
     answer = extract_solution(solution_str=solution_str)
     do_print = random.randint(1, 64) == 1
     
     if do_print:
         print(f"--------------------------------")
-        print(f"Golden answers: {ground_truth['target']}")
+        if isinstance(ground_truth, dict) and 'target' in ground_truth:
+            print(f"Golden answers: {ground_truth['target']}")
+        else:
+            print(f"Golden answers: {ground_truth}")
         print(f"Extracted answer: {answer}")
         print(f"Solution string: {solution_str}")
     
     if answer is None:
         return 0
-    else:
-        if em_check(answer, ground_truth['target']):
+    
+    # 处理不同格式的ground_truth
+    if isinstance(ground_truth, dict) and 'target' in ground_truth:
+        targets = ground_truth['target']
+        if em_check(answer, targets):
             return score
-        else:
-            return format_score
+    elif isinstance(ground_truth, (list, tuple)):
+        if em_check(answer, ground_truth):
+            return score
+    else:
+        if em_check(answer, ground_truth):
+            return score
+    
+    return format_score
 
 
 def compute_score_subem(solution_str, ground_truth, method='strict', format_score=0., score=1.):
@@ -136,3 +135,37 @@ def compute_score_subem(solution_str, ground_truth, method='strict', format_scor
             return score
         else:
             return format_score
+
+# 添加一个可选的带过程奖励的计分函数
+def compute_score_with_process(solution_str, ground_truth, method='strict', search_bonus=0.3, answer_bonus=0.7):
+    """带有过程奖励的评分函数"""
+    # 检查搜索行为
+    search_pattern = r'<search>(.*?)</search>'
+    search_count = len(re.findall(search_pattern, solution_str))
+    has_search = search_count > 0
+    
+    # 检查信息获取
+    info_pattern = r'<information>(.*?)</information>'
+    info_count = len(re.findall(info_pattern, solution_str))
+    has_info = info_count > 0
+    
+    # 检查是否有最终答案
+    answer_pattern = r'<answer>(.*?)</answer>'
+    has_answer = bool(re.search(answer_pattern, solution_str))
+    
+    # 计算基本分数
+    base_score = compute_score_em(solution_str, ground_truth)
+    
+    # 计算过程分数
+    process_score = 0.0
+    if has_search:
+        process_score += 0.2
+    if has_info:
+        process_score += 0.3
+    if has_answer:
+        process_score += 0.2
+    
+    # 总分 = 过程分数 * 过程权重 + 基本分数 * 答案权重
+    total_score = (process_score * search_bonus) + (base_score * answer_bonus)
+    
+    return total_score

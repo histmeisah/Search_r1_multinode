@@ -125,3 +125,8 @@ tests/e2e/toy_examples/deepspeed/synchronous/output.txt
 logs
 log
 outputs
+cache/
+e5_Flat.index
+model/
+scripts/e5_Flat.index
+verl_checkpoints/

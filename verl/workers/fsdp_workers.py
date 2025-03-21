@@ -296,71 +296,190 @@ class ActorRolloutRefWorker(Worker):
         return actor_module_fsdp, actor_optimizer, actor_lr_scheduler, actor_model_config
 
     def _build_rollout(self):
+        """Build a rollout engine for the actor model."""
         from torch.distributed.device_mesh import init_device_mesh
-        # TODO(sgm): support FSDP hybrid shard for larger model
-        infer_tp = self.config.rollout.tensor_model_parallel_size
+        from omegaconf import OmegaConf, open_dict
+        
+        # 创建配置的副本，这样我们不会修改原始配置
+        rollout_config = OmegaConf.create(OmegaConf.to_container(self.config.rollout, resolve=True))
+        
+        # 检查是否启用搜索
+        use_search = rollout_config.get('enable_search', False)
+        search_url = rollout_config.get('search_url', None)
+        search_topk = rollout_config.get('search_topk', 3)
+        max_turns = rollout_config.get('max_turns', 5)
+        ignore_eos = rollout_config.get('ignore_eos', False)
+        
+        # 从配置中删除搜索相关参数，以避免传递给原始vLLMRollout
+        with open_dict(rollout_config):
+            if 'enable_search' in rollout_config:
+                del rollout_config.enable_search
+            if 'search_url' in rollout_config:
+                del rollout_config.search_url
+            if 'search_topk' in rollout_config:
+                del rollout_config.search_topk
+            if 'max_turns' in rollout_config:
+                del rollout_config.max_turns
+            if 'ignore_eos' in rollout_config:
+                del rollout_config.ignore_eos
+        
+        # 确保其他必要的参数存在
+        if 'name' not in rollout_config:
+            with open_dict(rollout_config):
+                rollout_config.name = 'hf'
+        
+        # 创建TP设备网格
+        infer_tp = rollout_config.tensor_model_parallel_size
         dp = self.world_size // infer_tp
         assert self.world_size % infer_tp == 0, f'rollout world_size: {self.world_size} is not divisible by infer_tp: {infer_tp}'
         rollout_device_mesh = init_device_mesh('cuda', mesh_shape=(dp, infer_tp), mesh_dim_names=['dp', 'infer_tp'])
-        rollout_name = self.config.rollout.name
-        if rollout_name == 'hf':
-            from verl.workers.rollout import HFRollout
-            from verl.workers.sharding_manager import BaseShardingManager
-            rollout = HFRollout(module=self.actor_module_fsdp, config=self.config.rollout)
-            rollout_sharding_manager = BaseShardingManager()
-            # TODO: a sharding manager that do nothing?
-
-        elif rollout_name == 'vllm':
+        
+        rollout_name = rollout_config.name
+        rollout_kwargs = {}
+        rollout_sharding_manager = None
+        
+        if rollout_name == 'vllm':
             from verl.workers.rollout.vllm_rollout import vLLMRollout, vllm_mode
             from verl.workers.sharding_manager import FSDPVLLMShardingManager
+            
             log_gpu_memory_usage(f'Before building {rollout_name} rollout', logger=None)
+            
             local_path = copy_to_local(self.config.model.path)
-            if vllm_mode == 'customized':
-                rollout = vLLMRollout(actor_module=self.actor_module_fsdp,
-                                      config=self.config.rollout,
-                                      tokenizer=self.tokenizer,
-                                      model_hf_config=self.actor_model_config)
-            elif vllm_mode == 'spmd':
-                rollout = vLLMRollout(model_path=local_path,
-                                      config=self.config.rollout,
-                                      tokenizer=self.tokenizer,
-                                      model_hf_config=self.actor_model_config,
-                                      device_mesh=rollout_device_mesh)
+            
+            # 根据是否启用搜索选择正确的rollout类
+            if use_search and search_url:
+                try:
+                    # 导入搜索增强rollout类
+                    from verl.workers.rollout.vllm_rollout.search_vllm_rollout import SearchEnabledVLLMRollout
+                    
+                    # 将搜索参数添加回配置
+                    with open_dict(rollout_config):
+                        rollout_config.enable_search = use_search
+                        rollout_config.search_url = search_url
+                        rollout_config.search_topk = search_topk
+                        rollout_config.max_turns = max_turns
+                        rollout_config.ignore_eos = ignore_eos
+                    
+                    print(f"Initializing SearchEnabledVLLMRollout with search_url={search_url}, "
+                          f"topk={search_topk}, max_turns={max_turns}")
+                    
+                    if vllm_mode == 'customized':
+                        if hasattr(self, 'train_tp'):
+                            rollout_kwargs['train_tp'] = self.train_tp
+                        
+                        rollout = SearchEnabledVLLMRollout(
+                            actor_module=self.actor_module_fsdp,
+                            config=rollout_config,
+                            tokenizer=self.tokenizer,
+                            model_hf_config=self.actor_model_config,
+                            **rollout_kwargs
+                        )
+                    elif vllm_mode == 'spmd':
+                        rollout = SearchEnabledVLLMRollout(
+                            model_path=local_path,
+                            config=rollout_config,
+                            tokenizer=self.tokenizer,
+                            model_hf_config=self.actor_model_config,
+                            device_mesh=rollout_device_mesh,
+                            **rollout_kwargs
+                        )
+                    else:
+                        raise NotImplementedError("vllm_mode must be 'customized' or 'spmd'")
+                
+                except ImportError as e:
+                    print(f"WARNING: Failed to import SearchEnabledVLLMRollout: {e}")
+                    print("Falling back to standard vLLMRollout")
+                    
+                    # 回退到标准vLLM rollout
+                    if vllm_mode == 'customized':
+                        rollout = vLLMRollout(
+                            actor_module=self.actor_module_fsdp,
+                            config=rollout_config,
+                            tokenizer=self.tokenizer,
+                            model_hf_config=self.actor_model_config,
+                            **rollout_kwargs
+                        )
+                    elif vllm_mode == 'spmd':
+                        rollout = vLLMRollout(
+                            model_path=local_path,
+                            config=rollout_config,
+                            tokenizer=self.tokenizer,
+                            model_hf_config=self.actor_model_config,
+                            device_mesh=rollout_device_mesh,
+                            **rollout_kwargs
+                        )
+                    else:
+                        raise NotImplementedError("vllm_mode must be 'customized' or 'spmd'")
+            
             else:
-                raise NotImplementedError("vllm_mode must be 'customized' or 'spmd'")
+                # 使用标准vLLM rollout
+                if vllm_mode == 'customized':
+                    if hasattr(self, 'train_tp'):
+                        rollout_kwargs['train_tp'] = self.train_tp
+                    
+                    rollout = vLLMRollout(
+                        actor_module=self.actor_module_fsdp,
+                        config=rollout_config,
+                        tokenizer=self.tokenizer,
+                        model_hf_config=self.actor_model_config,
+                        **rollout_kwargs
+                    )
+                elif vllm_mode == 'spmd':
+                    rollout = vLLMRollout(
+                        model_path=local_path,
+                        config=rollout_config,
+                        tokenizer=self.tokenizer,
+                        model_hf_config=self.actor_model_config,
+                        device_mesh=rollout_device_mesh,
+                        **rollout_kwargs
+                    )
+                else:
+                    raise NotImplementedError("vllm_mode must be 'customized' or 'spmd'")
+            
             log_gpu_memory_usage(f'After building {rollout_name} rollout', logger=None)
+            
             if torch.distributed.get_world_size() == 1:
-                self.config.rollout.load_format = 'dummy_hf'
-            rollout_sharding_manager = FSDPVLLMShardingManager(module=self.actor_module_fsdp,
-                                                               inference_engine=rollout.inference_engine,
-                                                               model_config=self.actor_model_config,
-                                                               full_params='hf' in self.config.rollout.load_format,
-                                                               device_mesh=rollout_device_mesh)
+                rollout_config.load_format = 'dummy_hf'
+            
+            rollout_sharding_manager = FSDPVLLMShardingManager(
+                module=self.actor_module_fsdp,
+                inference_engine=rollout.inference_engine,
+                model_config=self.actor_model_config,
+                full_params='hf' in rollout_config.load_format,
+                device_mesh=rollout_device_mesh
+            )
+            
             log_gpu_memory_usage('After building sharding manager', logger=None)
-
+        
+        elif rollout_name == 'hf':
+            # 处理HF rollout的配置逻辑(保留原代码)
+            from verl.workers.rollout import HFRollout
+            from verl.workers.sharding_manager import BaseShardingManager
+            rollout = HFRollout(module=self.actor_module_fsdp, config=rollout_config)
+            rollout_sharding_manager = BaseShardingManager()
+        
         elif rollout_name == 'sglang':
+            # 处理SGLang rollout的配置逻辑(保留原代码)
             from verl.workers.rollout.sglang_rollout import SGLangRollout
-            # NOTE(linjunrong): Due to recent fp8 support in SGLang. Now importing any symbol relate to SGLang's model_runner would check CUDA device capability.
-            # However, due to veRL's setting, the main process of ray can not find any CUDA device, which would potentially lead to:
-            # "RuntimeError: No CUDA GPUs are available".
-            # For this reason, sharding_manager.__init__ should not import FSDPSGLangShardingManager and we import it here use the abs path.
-            # check: https://github.com/sgl-project/sglang/blob/00f42707eaddfc2c0528e5b1e0094025c640b7a0/python/sglang/srt/layers/quantization/fp8_utils.py#L76
             from verl.workers.sharding_manager.fsdp_sglang import FSDPSGLangShardingManager
             log_gpu_memory_usage(f'Before building {rollout_name} rollout', logger=None)
             rollout = SGLangRollout(actor_module=self.config.model.path,
-                                    config=self.config.rollout,
+                                    config=rollout_config,
                                     tokenizer=self.tokenizer,
                                     model_hf_config=self.actor_model_config)
             log_gpu_memory_usage(f'After building {rollout_name} rollout', logger=None)
 
             if torch.distributed.get_world_size() == 1:
-                self.config.rollout.load_format = 'dummy_hf'
+                rollout_config.load_format = 'dummy_hf'
             rollout_sharding_manager = FSDPSGLangShardingManager(module=self.actor_module_fsdp,
                                                                  inference_engine=rollout.inference_engine,
                                                                  model_config=self.actor_model_config,
-                                                                 full_params='hf' in self.config.rollout.load_format,
+                                                                 full_params='hf' in rollout_config.load_format,
                                                                  device_mesh=rollout_device_mesh)
             log_gpu_memory_usage('After building sharding manager', logger=None)
+        
+        else:
+            raise ValueError(f"Unknown rollout name: {rollout_name}")
 
         return rollout, rollout_sharding_manager
 
@@ -448,6 +567,10 @@ class ActorRolloutRefWorker(Worker):
 
         log_gpu_memory_usage('Before update policy', logger=logger)
 
+        # 添加创建损失掩码的调用
+        metrics = {}
+        data, metrics = self._create_loss_mask(data, metrics)
+        
         with self.ulysses_sharding_manager:
             data = self.ulysses_sharding_manager.preprocess_data(data=data)
             # perform training
@@ -611,6 +734,27 @@ class ActorRolloutRefWorker(Worker):
 
         if self._is_offload_optimizer:
             offload_fsdp_optimizer(self.actor_optimizer)
+
+    def _create_loss_mask(self, batch, metrics):
+        """Create loss mask for state tokens."""
+        response_length = batch.batch['responses'].shape[-1]
+        response_mask = batch.batch['attention_mask'][:, -response_length:]
+        
+        # 检查是否存在info_mask
+        if 'info_mask' in batch.batch:
+            loss_mask = batch.batch['info_mask'][:, -response_length:]
+        else:
+            # 如果没有info_mask，使用完整的响应掩码
+            loss_mask = response_mask.clone()
+        
+        batch.batch['loss_mask'] = loss_mask
+
+        metrics.update({
+            'state_tokens/total': loss_mask.sum().item(),
+            'state_tokens/coverage': (loss_mask.sum() / response_mask.sum()).item(),
+        })
+        
+        return batch, metrics
 
 
 class CriticWorker(Worker):

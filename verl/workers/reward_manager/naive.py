@@ -94,15 +94,24 @@ class NaiveRewardManager:
             ground_truth = data_item.non_tensor_batch['reward_model']['ground_truth']
 
             data_source = data_item.non_tensor_batch['data_source']
+            # 确保 data_source 存在，如果不存在，设为默认值
+            if not data_source:
+                data_source = 'nq_search'  # 设置默认数据源为 nq_search
 
             extra_info = data_item.non_tensor_batch.get('extra_info', None)
 
-            score = self.compute_score(
-                data_source=data_source,
-                solution_str=response_str,
-                ground_truth=ground_truth,
-                extra_info=extra_info,
-            )
+            try:
+                score = self.compute_score(
+                    data_source=data_source,
+                    solution_str=response_str,
+                    ground_truth=ground_truth,
+                    extra_info=extra_info,
+                )
+            except Exception as e:
+                print(f"Error computing score for data_source={data_source}: {e}")
+                score = 0.0  # 出错时设置为0分
+
+            # 将奖励放在最后一个有效token位置
             reward_tensor[i, valid_response_length - 1] = score
 
             if data_source not in already_print_data_sources:
@@ -113,6 +122,7 @@ class NaiveRewardManager:
                 print("[prompt]", prompt_str)
                 print("[response]", response_str)
                 print("[ground_truth]", ground_truth)
+                print("[data_source]", data_source)
                 print("[score]", score)
 
         return reward_tensor

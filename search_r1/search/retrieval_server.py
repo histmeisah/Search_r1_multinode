@@ -21,6 +21,7 @@ parser.add_argument("--index_path", type=str, default="/home/peterjin/mnt/index/
 parser.add_argument("--corpus_path", type=str, default="/home/peterjin/mnt/data/retrieval-corpus/wiki-18.jsonl", help="Local corpus file.")
 parser.add_argument("--topk", type=int, default=3, help="Number of retrieved passages for one query.")
 parser.add_argument("--retriever_model", type=str, default="intfloat/e5-base-v2", help="Name of the retriever model.")
+parser.add_argument("--port", type=int, default=8000, help="Port to run the server on.")
 
 args = parser.parse_args()
 
@@ -378,5 +379,5 @@ def retrieve_endpoint(request: QueryRequest):
 
 
 if __name__ == "__main__":
-    # 3) Launch the server. By default, it listens on http://127.0.0.1:8000
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # 3) Launch the server. Now using the configurable port from command-line args
+    uvicorn.run(app, host="0.0.0.0", port=args.port)

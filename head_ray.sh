@@ -16,5 +16,5 @@ export EXPERIMENT_NAME=nq-search-r1-ppo-llama3.2-3b-em
 export VLLM_ATTENTION_BACKEND=XFORMERS # vllm + qwen2-7b with flash_attn has some issues
 
 PET_MASTER_PORT=8266
-MASTER_ADDR="192.168.194.186"
+MASTER_ADDR="192.168.154.83"
 ray start --head --port=$PET_MASTER_PORT

@@ -37,10 +37,28 @@ def _default_compute_score(data_source, solution_str, ground_truth, extra_info=N
     elif data_source in ['hiyouga/geometry3k']:
         from . import geo3k
         res = geo3k.compute_score(solution_str, ground_truth)
+    # 使用统一的qa_em模块处理所有问答任务
+    elif data_source in ['nq', 'nq_search', 'triviaqa', 'popqa', 'hotpotqa', '2wikimultihopqa', 'musique', 'bamboogle']:
+        from . import qa_em
+        # 如果是搜索任务，使用带过程奖励的评分
+        if data_source in ['nq', 'nq_search']:
+            res = qa_em.compute_score_with_process(solution_str, ground_truth)
+        else:
+            res = qa_em.compute_score_em(solution_str, ground_truth)
     else:
-        raise NotImplementedError
+        raise NotImplementedError(f"Unsupported data source: {data_source}")
 
     if isinstance(res, (int, float, bool)):
         return float(res)
     else:
         return float(res[0])
+
+# 选择奖励函数
+def _select_rm_score_fn(data_source):
+    from . import qa_em
+    if data_source in ['nq', 'nq_search']:
+        return qa_em.compute_score_with_process
+    elif data_source in ['triviaqa', 'popqa', 'hotpotqa', '2wikimultihopqa', 'musique', 'bamboogle']:
+        return qa_em.compute_score_em
+    else:
+        raise NotImplementedError(f"Unsupported data source: {data_source}")

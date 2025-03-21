@@ -70,8 +70,8 @@ actor_rollout_ref:
     top_k: -1 # 0 for hf rollout, -1 for vllm rollout
     top_p: 1
     use_fire_sampling: False # https://arxiv.org/abs/2410.21236
-    prompt_length: ${data.max_prompt_length}  # not use for opensource
-    response_length: ${data.max_response_length}
+    prompt_length: ${data.max_prompt_length}  # 明确设置最大提示长度
+    response_length: ${data.max_response_length}  # 明确设置最大响应长度
     # for vllm rollout
     dtype: bfloat16 # should align with FSDP
     gpu_memory_utilization: 0.5
@@ -100,6 +100,14 @@ actor_rollout_ref:
       temperature: 0
       n: 1
       do_sample: False # default eager for validation
+    enable_search: False  # 是否启用搜索
+    search_url: "http://search-server:8000/retrieve"  # 搜索服务URL
+    search_topk: 3  # 每次搜索返回的最大结果数
+    max_turns: 5  # 最大交互轮数
+    state_masking:  # 状态掩码配置
+      start_state_marker: "<information>"  # 开始标记
+      end_state_marker: "</information>"  # 结束标记
+    truncation_strategy: "left"  # 截断策略：left, right 或 error
 
 critic:
   strategy: fsdp

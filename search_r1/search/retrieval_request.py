@@ -1,7 +1,7 @@
 import requests
 
 # URL for your local FastAPI server
-url = "http://127.0.0.1:8000/retrieve"
+url = "http://192.168.194.186:8004/retrieve"
 
 # Example payload
 payload = {
