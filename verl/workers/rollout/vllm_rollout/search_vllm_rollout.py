@@ -187,21 +187,11 @@ class SearchEnabledVLLMRollout(vLLMRollout):
                 return torch.tensor([], device=tensor.device, dtype=tensor.dtype)
             return tensor.narrow(dim, start, end - start)
     
-    @torch.no_grad()
-    def generate_sequences_for_validation(self, prompts: DataProto, **kwargs) -> DataProto:
-        """生成用于验证的序列，不使用搜索"""
-        # 直接调用父类方法，绕过搜索功能
-        return super().generate_sequences(prompts, **kwargs)
+
     
     @torch.no_grad()
     def generate_sequences_with_search(self, prompts: DataProto, **kwargs) -> DataProto:
         """支持多轮交互搜索的生成方法，始终保持固定大小的输出张量"""
-        # 检查是否是验证过程
-        is_validate = prompts.meta_info.get('validate', False)
-        if is_validate:
-            print("Running validation, skipping search functionality")
-            return self.generate_sequences_for_validation(prompts, **kwargs)
-        
         # 获取初始输入和配置信息
         input_ids = prompts.batch['input_ids']
         attention_mask = prompts.batch['attention_mask']
@@ -209,8 +199,37 @@ class SearchEnabledVLLMRollout(vLLMRollout):
         batch_size = input_ids.size(0)
         device = input_ids.device
         
-        # 获取n值，用于后续处理
+        # 获取相关元信息
         do_sample = prompts.meta_info.get('do_sample', True)
+        is_validate = prompts.meta_info.get('validate', False)
+        
+        # 使用和vllm_rollout.py相同的参数处理方式
+        search_kwargs = {}
+        if not do_sample:
+            search_kwargs = {
+                'best_of': 1,
+                'top_p': 1.0,
+                'top_k': -1,
+                'min_p': 0.0,
+                'temperature': 0,
+                'n': 1  # if greedy, only 1 response
+            }
+        elif is_validate:
+            search_kwargs = {
+                'top_k': self.config.val_kwargs.top_k,
+                'top_p': self.config.val_kwargs.top_p,
+                'temperature': self.config.val_kwargs.temperature,
+                'n': 1,  # if validate, already repeat in ray_trainer
+            }
+        
+        # 验证阶段可能需要调整搜索相关参数
+        if is_validate:
+            print("Running validation with search functionality")
+            max_turns = min(self.max_turns, 5)  # 验证时限制搜索轮数
+        else:
+            max_turns = self.max_turns
+        
+        # 获取n值，用于后续处理
         n_samples = self.sampling_params.n if do_sample else 1
         
         # 从配置获取关键参数
@@ -229,7 +248,7 @@ class SearchEnabledVLLMRollout(vLLMRollout):
         fixed_size_input_ids = input_ids.clone()
         
         # 多轮生成循环
-        for turn in range(self.max_turns):
+        for turn in range(max_turns):
             if not active_mask.any():
                 break
             
@@ -246,7 +265,7 @@ class SearchEnabledVLLMRollout(vLLMRollout):
             active_prompts.meta_info = prompts.meta_info.copy()
             
             # 生成响应
-            gen_output = super().generate_sequences(active_prompts, **kwargs)
+            gen_output = super().generate_sequences(active_prompts, **{**kwargs, **search_kwargs})
             responses = gen_output.batch['responses']
             
             # 处理形状不匹配问题
@@ -288,7 +307,7 @@ class SearchEnabledVLLMRollout(vLLMRollout):
                     new_active_indices.append(i)
             
             # 如果需要继续，准备下一轮输入
-            if active_mask.any() and turn < self.max_turns - 1:
+            if active_mask.any() and turn < max_turns - 1:
                 # 创建带搜索结果的下一轮输入
                 active_search_results = {
                     i: search_results[new_active_indices[i]] 
@@ -424,9 +443,9 @@ class SearchEnabledVLLMRollout(vLLMRollout):
         
         start_time = time.time()
         
-        # 检查是否启用搜索
-        if self.enable_search and not is_validate:
-            print("[DEBUG] generate_sequences - Using search-enabled generation")
+        # 无论是验证还是训练，只要启用了搜索就使用搜索
+        if self.enable_search:
+            print(f"[DEBUG] generate_sequences - Using search-enabled generation (validate={is_validate})")
             result = self.generate_sequences_with_search(prompts, **kwargs)
         else:
             # 否则，使用父类实现

@@ -9,9 +9,9 @@ export LD_LIBRARY_PATH=/usr/lib64:$LD_LIBRARY_PATH
 export VLLM_ATTENTION_BACKEND=XFORMERS # vllm + qwen2-7b with flash_attn has some issues
 
 # Model configuration
-export BASE_MODEL='/home/ma-user/modelarts/work/model/Qwen2.5-7B-Instruct'
+export BASE_MODEL='/home/ma-user/modelarts/work/model/Qwen2.5-7B'
 export WANDB_PROJECT='Search-R1'
-export EXPERIMENT_NAME='nq-search-r1-grpo-qwen2.5-7b'
+export EXPERIMENT_NAME='nq-search-r1-ppo-qwen2.5-7b-3-24'
 
 # Search-related configuration
 export ENABLE_SEARCH=true
@@ -76,7 +76,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     actor_rollout_ref.rollout.ignore_eos=$IGNORE_EOS \
     algorithm.kl_ctrl.kl_coef=0.001 \
     trainer.critic_warmup=0 \
-    trainer.logger=['console','wandb'] \
+    trainer.logger=['wandb'] \
     trainer.project_name=$WANDB_PROJECT \
     trainer.experiment_name=$EXPERIMENT_NAME \
     trainer.n_gpus_per_node=8 \
