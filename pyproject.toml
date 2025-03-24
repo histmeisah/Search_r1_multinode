@@ -57,7 +57,7 @@ test = [
 ]
 prime = ["pyext"]
 gpu = ["liger-kernel", "flash-attn"]
-sglang = ["sglang[all]==0.4.3.post3"]
+sglang = ["sglang[all]==0.4.4"]
 
 # URLs
 [project.urls]
