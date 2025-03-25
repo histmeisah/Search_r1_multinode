@@ -13,5 +13,7 @@ Reward related :
 2. modify verl/utils/reward_score/qa_em.py
 3. modify verl/workers/reward_manager/naive.py
 
+If you want to try this repo, please run head_ray.sh on the head node and node_ray.sh on the the worker node. Than run the `test_search_r1.sh`
+
 
 
