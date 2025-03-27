@@ -1,6 +1,8 @@
 We reimplement the Search-r1 base on the newest verl.
 
+
 We create a new vllm_rollout: `/verl/workers/rollout/vllm_rollout/search_vllm_rollout.py` . This rollout can generation answer and use search engine which developed by search-r1.
+
 
 So the edited files are:
 Train related
@@ -14,6 +16,5 @@ Reward related :
 3. modify verl/workers/reward_manager/naive.py
 
 If you want to try this repo, please run head_ray.sh on the head node and node_ray.sh on the the worker node. Than run the `test_search_r1.sh`
-
 
 
