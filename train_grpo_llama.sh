@@ -8,17 +8,17 @@ WAND_PROJECT='Search-R1'
 
 export BASE_MODEL='/home/ma-user/modelarts/work/jjw/Search-R1/model/meta-llama/Llama-3.2-3B'
 # export BASE_MODEL='/home/ma-user/modelarts/work/model/Qwen2.5-7B-Instruct'
-export EXPERIMENT_NAME=nq-search-r1-ppo-llama3.2-3b-em
+export EXPERIMENT_NAME=nq-search-r1-ppo-llama3.2-3b-em-11
 
 export VLLM_ATTENTION_BACKEND=XFORMERS # vllm + qwen2-7b with flash_attn has some issues
 
 # max_prompt_length = (config['training']['max_start_length'] + config['training']['max_response_length'] * (config['training']['max_turns'] - 1) + config['training']['max_obs_length'] * config['training']['max_turns'])
-
+export HYDRA_FULL_ERROR=1
 PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     data.train_files=$DATA_DIR/train.parquet \
     data.val_files=$DATA_DIR/test.parquet \
-    data.train_data_num=null \
-    data.val_data_num=null \
+    +data.train_data_num=null \
+    +data.val_data_num=null \
     data.train_batch_size=512 \
     data.val_batch_size=256 \
     data.max_prompt_length=4096 \
