@@ -3,8 +3,8 @@
 # Environment setup
 source /home/ma-user/modelarts/work/jjw/Search-R1/r1_env.sh
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-export DATA_DIR='/home/ma-user/modelarts/work/jjw/Search-R1/data/nq_search'
-export WANDB_API_KEY='5d830c409e2aa7dff34c333a2f79798a877bfc7b'
+export DATA_DIR=''
+export WANDB_API_KEY=''
 export LD_LIBRARY_PATH=/usr/lib64:$LD_LIBRARY_PATH
 export VLLM_ATTENTION_BACKEND=XFORMERS # vllm + qwen2-7b with flash_attn has some issues
 
@@ -16,8 +16,8 @@ export CURRENT_DATETIME=$(date +"%Y-%m-%d_%H-%M-%S")
 export EXPERIMENT_NAME="nq-search-r1-grpo-qwen2.5-7b-${CURRENT_DATETIME}"
 # Search-related configuration
 export ENABLE_SEARCH=true
-# export SEARCH_URL="http://192.168.154.83:8004/retrieve"
-export SEARCH_URL="http://192.168.194.186:8004/retrieve"
+
+export SEARCH_URL=""
 export SEARCH_TOPK=3
 export MAX_OBS_LENGTH=300
 export MAX_TURNS=2
